@@ -343,6 +343,14 @@ def run_stress(_bor, _nc, _reserve, _margin):
     return StressCalculator(_bor, _nc, _reserve, _margin).calculate()
 
 
+# ── Early session state (must exist before header widgets render) ──────────────
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_trades" not in st.session_state:
+    st.session_state.live_trades = []
+if "_live_rc" not in st.session_state:
+    st.session_state._live_rc = 0
+
 # ── Page header ───────────────────────────────────────────────────────────────
 
 st.markdown(f"""
