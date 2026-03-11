@@ -343,6 +343,68 @@ def run_stress(_bor, _nc, _reserve, _margin):
     return StressCalculator(_bor, _nc, _reserve, _margin).calculate()
 
 
+@st.cache_data
+def _build_trend_figs(hist_key: tuple):
+    """Build the 4 metrics-trend figures. Re-runs only when hist_key changes."""
+    import pandas as _pd
+    hdf = _pd.DataFrame(list(hist_key),
+                        columns=["time", "net_capital", "required_nc",
+                                 "cushion_pct", "reserve_req", "margin_calls"])
+    _cl = {k: v for k, v in CHART_LAYOUT.items() if k != "title"}
+
+    fig_nc = go.Figure()
+    fig_nc.add_trace(go.Scatter(
+        x=hdf["time"], y=hdf["net_capital"] / 1e6, name="Net Capital",
+        line=dict(color=COLORS["blue"], width=2),
+        fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+    ))
+    fig_nc.add_trace(go.Scatter(
+        x=hdf["time"], y=hdf["required_nc"] / 1e6, name="Required NC",
+        line=dict(color=COLORS["red"], width=1.5, dash="dash"),
+    ))
+    fig_nc.update_layout(
+        title=dict(text="Net Capital vs Required ($M)", font=dict(size=11)),
+        yaxis_title="$M", **_cl,
+    )
+
+    fig_cs = go.Figure()
+    fig_cs.add_trace(go.Scatter(
+        x=hdf["time"], y=hdf["cushion_pct"], name="Cushion %",
+        line=dict(color=COLORS["green"], width=2),
+        fill="tozeroy", fillcolor="rgba(16,185,129,0.08)",
+    ))
+    fig_cs.add_hline(y=5, line_color=COLORS["amber"], line_dash="dash",
+                     annotation_text="Early Warning 5%", annotation_font_size=9)
+    fig_cs.add_hline(y=2, line_color=COLORS["red"], line_dash="dash",
+                     annotation_text="Min 2%", annotation_font_size=9)
+    fig_cs.update_layout(
+        title=dict(text="NC Cushion % of ADI", font=dict(size=11)),
+        yaxis_title="%", **_cl,
+    )
+
+    fig_res = go.Figure(go.Scatter(
+        x=hdf["time"], y=hdf["reserve_req"] / 1e6, name="Reserve Req",
+        line=dict(color=COLORS["purple"], width=2),
+        fill="tozeroy", fillcolor="rgba(139,92,246,0.08)",
+    ))
+    fig_res.update_layout(
+        title=dict(text="Customer Reserve Required ($M)", font=dict(size=11)),
+        yaxis_title="$M", **_cl,
+    )
+
+    fig_mg = go.Figure()
+    fig_mg.add_trace(go.Bar(
+        x=hdf["time"], y=hdf["margin_calls"] / 1e6,
+        name="Margin Calls $M", marker_color=COLORS["amber"],
+    ))
+    fig_mg.update_layout(
+        title=dict(text="Margin Call Amount ($M)", font=dict(size=11)),
+        yaxis_title="$M", **_cl,
+    )
+
+    return fig_nc, fig_cs, fig_res, fig_mg
+
+
 # ── Early session state (must exist before header widgets render) ──────────────
 if "live_mode" not in st.session_state:
     st.session_state.live_mode = False
@@ -400,7 +462,7 @@ with col_regen:
 # ── Auto-refresh + simulated live trades ──────────────────────────────────────
 if st.session_state.live_mode:
     from streamlit_autorefresh import st_autorefresh
-    _rc = st_autorefresh(interval=8_000, key="live_autorefresh")
+    _rc = st_autorefresh(interval=30_000, key="live_autorefresh")
     if _rc != st.session_state._live_rc:
         st.session_state._live_rc = _rc
         # Simulate a small batch of incoming trades each tick
@@ -428,6 +490,9 @@ if st.session_state.live_mode:
                     is_margin=True,
                 ))
             st.session_state.live_trades.extend(_batch)
+            # Rolling window — prevent unbounded memory growth
+            if len(st.session_state.live_trades) > 500:
+                st.session_state.live_trades = st.session_state.live_trades[-500:]
 
 bor, nc, reserve, margin, focus, fails, clearing = run_all()
 
@@ -466,10 +531,13 @@ _snap = {
     "n_calls":      margin.accounts_with_margin_calls,
     "live_trades":  len(st.session_state.get("live_trades", [])),
 }
-_hist = st.session_state.get("metrics_history", [])
-if not _hist or _hist[-1]["net_capital"] != nc.net_capital or _hist[-1]["live_trades"] != _snap["live_trades"]:
+_hist = list(st.session_state.get("metrics_history", []))  # copy; never mutate session state in-place
+_last = _hist[-1] if _hist else {}
+if _last.get("net_capital") != nc.net_capital or _last.get("live_trades") != _snap["live_trades"]:
     _hist.append(_snap)
-    st.session_state.metrics_history = _hist[-500:]
+    if len(_hist) > 500:
+        _hist = _hist[-500:]
+    st.session_state.metrics_history = _hist
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "scenario_trades" not in st.session_state:
@@ -869,67 +937,23 @@ with t1:
     _hist_data = st.session_state.get("metrics_history", [])
     if len(_hist_data) >= 2:
         _section("Metrics Trends")
-        import pandas as _pd_tr
-        _hdf = _pd_tr.DataFrame(_hist_data)
+        _hist_key = tuple(
+            (r["time"], r["net_capital"], r["required_nc"],
+             r["cushion_pct"], r["reserve_req"], r["margin_calls"])
+            for r in _hist_data
+        )
+        _fig_nc, _fig_cs, _fig_res, _fig_mg = _build_trend_figs(_hist_key)
 
         _tr1, _tr2 = st.columns(2)
         with _tr1:
-            _fig_nc = go.Figure()
-            _fig_nc.add_trace(go.Scatter(
-                x=_hdf["time"], y=_hdf["net_capital"] / 1e6,
-                name="Net Capital", line=dict(color=COLORS["blue"], width=2), fill="tozeroy",
-                fillcolor="rgba(59,130,246,0.08)",
-            ))
-            _fig_nc.add_trace(go.Scatter(
-                x=_hdf["time"], y=_hdf["required_nc"] / 1e6,
-                name="Required NC", line=dict(color=COLORS["red"], width=1.5, dash="dash"),
-            ))
-            _fig_nc.update_layout(
-                title=dict(text="Net Capital vs Required ($M)", font=dict(size=11)),
-                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
-            )
             _chart(_fig_nc, height=260)
-
         with _tr2:
-            _fig_cs = go.Figure()
-            _fig_cs.add_trace(go.Scatter(
-                x=_hdf["time"], y=_hdf["cushion_pct"],
-                name="Cushion %", line=dict(color=COLORS["green"], width=2), fill="tozeroy",
-                fillcolor="rgba(16,185,129,0.08)",
-            ))
-            _fig_cs.add_hline(y=5, line_color=COLORS["amber"], line_dash="dash",
-                              annotation_text="Early Warning 5%", annotation_font_size=9)
-            _fig_cs.add_hline(y=2, line_color=COLORS["red"], line_dash="dash",
-                              annotation_text="Min 2%", annotation_font_size=9)
-            _fig_cs.update_layout(
-                title=dict(text="NC Cushion % of ADI", font=dict(size=11)),
-                yaxis_title="%", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
-            )
             _chart(_fig_cs, height=260)
 
         _tr3, _tr4 = st.columns(2)
         with _tr3:
-            _fig_res = go.Figure(go.Scatter(
-                x=_hdf["time"], y=_hdf["reserve_req"] / 1e6,
-                name="Reserve Req", line=dict(color=COLORS["purple"], width=2), fill="tozeroy",
-                fillcolor="rgba(139,92,246,0.08)",
-            ))
-            _fig_res.update_layout(
-                title=dict(text="Customer Reserve Required ($M)", font=dict(size=11)),
-                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
-            )
             _chart(_fig_res, height=260)
-
         with _tr4:
-            _fig_mg = go.Figure()
-            _fig_mg.add_trace(go.Bar(
-                x=_hdf["time"], y=_hdf["margin_calls"] / 1e6,
-                name="Margin Calls $M", marker_color=COLORS["amber"],
-            ))
-            _fig_mg.update_layout(
-                title=dict(text="Margin Call Amount ($M)", font=dict(size=11)),
-                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
-            )
             _chart(_fig_mg, height=260)
 
     # ── Exports ───────────────────────────────────────────────────────────────
