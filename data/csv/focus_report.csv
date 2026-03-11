@@ -1,0 +1,47 @@
+Firm,Acme Securities LLC
+BD ID,8-12345
+Period,2026-03
+As Of,2026-03-04
+
+Line,Description,Amount ($),Note
+1,Total Assets,"2,488,926,015.47",
+10,Payables to Broker-Dealers,"1,175,437,098.97",
+16,Stockholders' Equity / Net Worth,"150,000,000.00",
+2,Cash and Cash Equivalents,"11,377,907.09",
+2010,Customer Credit Balances (Free),0.00,
+2015,Customer Net Credit (Margin Accts),"9,302,097.48",
+2016,Amounts Payable — Short Sales,"77,133,631.68",
+2017,Stock Borrowed from Customers,"9,087,784.69",
+2020,Total Customer Credit Items,"98,863,573.62",
+2030,Total Customer Debit Items,"298,698,584.35",
+2035,Customer Debit Balances,"213,622,719.85",
+2040,Net Customer Reserve Required,0.00,
+2041,Current Customer Reserve Deposit,0.00,
+2042,Reserve Surplus / (Deficiency),0.00,
+2060,PAB Reserve Required,0.00,
+2061,PAB Credits,"35,068,684.41",
+2062,PAB Debits,"241,738,255.05",
+3,Receivables from Customers,"213,622,719.85",
+3210,Stockholders' Equity,"150,000,000.00",
+3215,Allowable Subordinated Debt,"25,000,000.00",
+3220,Total Capital,"175,000,000.00",
+3221,Less: Non-Allowable Assets,"12,750,000.00",
+3225,Tentative Net Capital,"162,250,000.00",
+3226,Less: Haircuts on Securities,"232,260,669.86",
+3230,Net Capital,"-70,010,669.86",
+3240,Required Net Capital (2% of ADI),"4,272,454.40",Alternative Method
+3250,Excess Net Capital,"-74,283,124.26",
+3260,Net Capital as % of Agg Debit Items,-32.77,Percentage
+3400,Aggregate Debit Items,"213,622,719.85",
+3410,Early Warning Level (5% of ADI),"10,681,135.99",
+4,Receivables from Brokers-Dealers,"1,221,132,057.55",
+4010,Total Customer Long Market Value,"801,554,343.54",
+4020,Total Customer Equity,"414,736,721.73",
+4030,Accounts with Margin Calls,19.00,Count
+4040,Total Margin Call Amount,"6,157,775.09",
+4800,Net Revenue — Repo / Financing,"317,282.08",Daily accrual
+4810,Net Revenue — Market Making,0.00,Not computed in this model
+4820,Net Revenue — Prime Brokerage,0.00,Not computed in this model
+5,Securities Owned (MV),"1,256,416,050.83",
+8,Total Liabilities,"1,673,456,145.95",
+9,Payables to Customers,"9,302,097.48",
