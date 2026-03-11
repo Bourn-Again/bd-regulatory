@@ -516,46 +516,58 @@ with t1:
         _runway_color = COLORS["green"]
     _runway_str = f"{_runway_val:.0f} days" if _runway_val != float("inf") else "∞"
 
-    _kpi_row([
-        ("Net Capital",
-         f"${nc.net_capital/1e6:,.1f}M",
-         _badge("COMPLIANT" if nc_ok else "NON-COMPLIANT", nc_ok),
-         COLORS["green"] if nc_ok else COLORS["red"],
-         nc_d, nc_dg),
-        ("Required Net Capital",
-         f"${nc.required_net_capital/1e6:,.2f}M",
-         f"2% × ${nc.aggregate_debit_items/1e6:,.0f}M ADI",
-         COLORS["blue"],
-         req_d, req_dg),
-        ("Excess / (Deficiency)",
-         f"${nc.excess_net_capital/1e6:,.1f}M",
-         f"NC {cushion:.1f}% of ADI",
-         COLORS["green"] if nc_ok else COLORS["red"],
-         exc_d, exc_dg),
-        ("Capital Runway",
-         _runway_str,
-         _runway_sub,
-         _runway_color),
-        ("Customer Reserve",
-         f"${reserve.total_reserve_required/1e6:,.1f}M",
-         _badge("FUNDED" if res_ok else "DEFICIENT", res_ok),
-         COLORS["green"] if res_ok else COLORS["red"],
-         res_d, res_dg),
-        ("Margin Calls",
-         str(margin.accounts_with_margin_calls),
-         f"${margin.total_margin_call_amount/1e6:,.2f}M total" if margin.accounts_with_margin_calls else "All accounts in compliance",
-         COLORS["green"] if mg_ok else COLORS["red"],
-         mg_d, mg_dg),
-        ("Clearing Org Margin",
-         f"${clearing.total_clearing_margin/1e6:,.1f}M",
-         _badge("ECP ACTIVE", False) if clearing.has_ecp_charge else f"{len(clearing.calls)} components",
-         COLORS["red"] if clearing.has_ecp_charge else COLORS["amber"]),
-        ("Worst-Case NC  (Stressed)",
-         f"${_worst.shocked_net_capital/1e6:,.1f}M",
-         _badge("COMPLIANT" if _worst.shocked_is_compliant else "BREACHED", _worst.shocked_is_compliant)
-         + f'<span style="font-size:9.5px;color:#4a6585;margin-left:0.4rem">{_worst.name}</span>',
-         COLORS["green"] if _worst.shocked_is_compliant else COLORS["red"]),
-    ])
+    _dash_kpi_items = [
+        (_kpi("Net Capital",
+              f"${nc.net_capital/1e6:,.1f}M",
+              _badge("COMPLIANT" if nc_ok else "NON-COMPLIANT", nc_ok),
+              COLORS["green"] if nc_ok else COLORS["red"],
+              nc_d, nc_dg), 1),
+        (_kpi("Required Net Capital",
+              f"${nc.required_net_capital/1e6:,.2f}M",
+              f"2% × ${nc.aggregate_debit_items/1e6:,.0f}M ADI",
+              COLORS["blue"],
+              req_d, req_dg), 1),
+        (_kpi("Excess / (Deficiency)",
+              f"${nc.excess_net_capital/1e6:,.1f}M",
+              f"NC {cushion:.1f}% of ADI",
+              COLORS["green"] if nc_ok else COLORS["red"],
+              exc_d, exc_dg), 1),
+        (_kpi("Capital Runway",
+              _runway_str,
+              _runway_sub,
+              _runway_color), 1),
+        (_kpi("Customer Reserve",
+              f"${reserve.total_reserve_required/1e6:,.1f}M",
+              _badge("FUNDED" if res_ok else "DEFICIENT", res_ok),
+              COLORS["green"] if res_ok else COLORS["red"],
+              res_d, res_dg), 2),
+        (_kpi("Margin Calls",
+              str(margin.accounts_with_margin_calls),
+              f"${margin.total_margin_call_amount/1e6:,.2f}M total" if margin.accounts_with_margin_calls else "All accounts in compliance",
+              COLORS["green"] if mg_ok else COLORS["red"],
+              mg_d, mg_dg), 3),
+        (_kpi("Clearing Org Margin",
+              f"${clearing.total_clearing_margin/1e6:,.1f}M",
+              _badge("ECP ACTIVE", False) if clearing.has_ecp_charge else f"{len(clearing.calls)} components",
+              COLORS["red"] if clearing.has_ecp_charge else COLORS["amber"]), 3),
+        (_kpi("Worst-Case NC  (Stressed)",
+              f"${_worst.shocked_net_capital/1e6:,.1f}M",
+              _badge("COMPLIANT" if _worst.shocked_is_compliant else "BREACHED", _worst.shocked_is_compliant)
+              + f'<span style="font-size:9.5px;color:#4a6585;margin-left:0.4rem">{_worst.name}</span>',
+              COLORS["green"] if _worst.shocked_is_compliant else COLORS["red"]), 8),
+    ]
+    _dash_cols = st.columns(len(_dash_kpi_items))
+    for _dc, (_kpi_html, _tab_idx) in zip(_dash_cols, _dash_kpi_items):
+        _oc = f"window.parent.document.querySelectorAll('[data-baseweb=tab]')[{_tab_idx}].click()"
+        _dc.markdown(
+            f'<div onclick="{_oc}" style="cursor:pointer;transition:filter 0.15s" '
+            f'onmouseover="this.style.filter=\'brightness(1.2)\'" '
+            f'onmouseout="this.style.filter=\'brightness(1)\'" '
+            f'title="Click to view details">'
+            + _kpi_html +
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     checks = [
         ("15c3-1  Net Capital",    nc_ok),
