@@ -396,6 +396,8 @@ cushion        = nc.cushion_pct * 100 if nc.cushion_pct != float("inf") else 0.0
 # ── Session state ─────────────────────────────────────────────────────────────
 if "scenario_trades" not in st.session_state:
     st.session_state.scenario_trades = []
+if "upload_key" not in st.session_state:
+    st.session_state.upload_key = 0
 if "sim_running" not in st.session_state:
     st.session_state.sim_running = False
 if "sim_trades" not in st.session_state:
@@ -449,7 +451,7 @@ if st.session_state.sim_trades or st.session_state.sim_running:
         unsafe_allow_html=True,
     )
 
-t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
+t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
     "Dashboard",
     "Net Capital  /  15c3-1",
     "Reserve  /  15c3-3",
@@ -459,6 +461,7 @@ t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
     "Reg SHO",
     "FOCUS  Report",
     "Scenario  Tester",
+    "Reg  Reference",
 ])
 
 
@@ -2059,6 +2062,100 @@ with t9:
             st.session_state.scenario_trades.append(trade)
             st.rerun()
 
+        # ── Upload Portfolio CSV ───────────────────────────────────────────────
+        st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
+        _section("Upload Portfolio CSV")
+
+        template_csv = (
+            "cusip,direction,quantity,price,account_id,description,is_margin\n"
+            "037833100,BUY,10000,,,,TRUE\n"
+            "594918104,SELL,5000,185.00,,Apple Inc,TRUE\n"
+        )
+        st.download_button(
+            label="⬇  Download Template",
+            data=template_csv,
+            file_name="portfolio_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        uploaded_file = st.file_uploader(
+            "Upload positions CSV",
+            type=["csv"],
+            label_visibility="collapsed",
+            key=f"portfolio_upload_{st.session_state.upload_key}",
+        )
+
+        if uploaded_file is not None:
+            try:
+                df_up = pd.read_csv(uploaded_file)
+                df_up.columns = [c.strip().lower() for c in df_up.columns]
+                required_cols = {"cusip", "direction", "quantity"}
+                missing_cols = required_cols - set(df_up.columns)
+                if missing_cols:
+                    st.error(f"Missing required columns: {', '.join(sorted(missing_cols))}")
+                else:
+                    default_acct = list(client_accts.keys())[0] if client_accts else ""
+                    parsed, errs = [], []
+                    for idx, row in df_up.iterrows():
+                        try:
+                            cusip_u = str(row["cusip"]).strip()
+                            dir_u = str(row["direction"]).strip().upper()
+                            if dir_u not in ("BUY", "SELL"):
+                                errs.append(f"Row {idx+2}: direction must be BUY or SELL")
+                                continue
+                            qty_u = float(row["quantity"])
+
+                            sec_u = bor.securities.get(cusip_u)
+
+                            try:
+                                price_u = float(row.get("price", ""))
+                            except (ValueError, TypeError):
+                                price_u = sec_u.price if sec_u else 0.0
+
+                            acct_raw = str(row.get("account_id", "")).strip()
+                            acct_u = acct_raw if acct_raw and acct_raw != "nan" else default_acct
+
+                            desc_raw = str(row.get("description", "")).strip()
+                            desc_u = (desc_raw if desc_raw and desc_raw != "nan"
+                                      else (sec_u.description if sec_u else cusip_u))
+
+                            margin_raw = str(row.get("is_margin", "TRUE")).strip().upper()
+                            is_margin_u = margin_raw not in ("FALSE", "0", "NO")
+
+                            parsed.append(ScenarioTrade(
+                                trade_id=new_trade_id(),
+                                account_id=acct_u,
+                                client_name=(bor.accounts[acct_u].client_name
+                                             if acct_u in bor.accounts else acct_u),
+                                cusip=cusip_u,
+                                description=desc_u,
+                                direction=dir_u,
+                                quantity=qty_u,
+                                price=price_u,
+                                security_type=(sec_u.security_type.value if sec_u else "EQUITY_LISTED"),
+                                asset_class=(sec_u.asset_class if sec_u else "equity"),
+                                is_margin=is_margin_u,
+                            ))
+                        except Exception as row_exc:
+                            errs.append(f"Row {idx+2}: {row_exc}")
+
+                    for e in errs[:5]:
+                        st.warning(e)
+
+                    if parsed:
+                        st.caption(f"{len(parsed)} trade{'s' if len(parsed) != 1 else ''} ready to import")
+                        if st.button(
+                            f"＋  Add {len(parsed)} Trade{'s' if len(parsed) != 1 else ''}",
+                            use_container_width=True,
+                            key="add_uploaded",
+                        ):
+                            st.session_state.scenario_trades.extend(parsed)
+                            st.session_state.upload_key += 1
+                            st.rerun()
+            except Exception as exc:
+                st.error(f"Could not parse CSV: {exc}")
+
         # ── Random Batch Generator ─────────────────────────────────────────────
         st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
         _section("Random Batch Generator")
@@ -2646,3 +2743,156 @@ with t9:
 
         time.sleep(tick_interval)
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REG REFERENCE
+# ══════════════════════════════════════════════════════════════════════════════
+
+with t10:
+    _section("Regulatory Reference — Rules Tracked by This Dashboard")
+
+    REG_ROWS = [
+        {
+            "Rule / Regulation":       "SEC Rule 15c3-1\nNet Capital Rule",
+            "Governing Body":          "SEC",
+            "CFR Citation":            "17 CFR § 240.15c3-1",
+            "Federal Register Ref":    "42 FR 33714 (Jul. 1, 1977)\nAmended 87 FR 25722 (May 2, 2022)",
+            "Dashboard Tab":           "Net Capital / 15c3-1",
+            "Key Threshold":           "Min $250,000 or 2% of aggregate debit items (Alternative Method); 5% early warning",
+            "Description":             "Requires broker-dealers to maintain minimum net capital at all times. Haircuts are applied to proprietary securities positions and subtracted from tentative net capital.",
+        },
+        {
+            "Rule / Regulation":       "SEC Rule 15c3-3\nCustomer Protection Rule",
+            "Governing Body":          "SEC",
+            "CFR Citation":            "17 CFR § 240.15c3-3",
+            "Federal Register Ref":    "37 FR 25226 (Nov. 29, 1972)\nAmended 83 FR 51050 (Oct. 10, 2018)",
+            "Dashboard Tab":           "Reserve / 15c3-3",
+            "Key Threshold":           "Weekly reserve computation; customer funds segregated in Special Reserve Bank Account",
+            "Description":             "Requires broker-dealers to maintain possession or control of customer fully-paid and excess margin securities, and to hold net customer credits in a segregated reserve account.",
+        },
+        {
+            "Rule / Regulation":       "Regulation T\nCredit by Brokers & Dealers",
+            "Governing Body":          "Federal Reserve Board",
+            "CFR Citation":            "12 CFR § 220",
+            "Federal Register Ref":    "29 FR 12278 (Aug. 28, 1964)\nVarious amendments",
+            "Dashboard Tab":           "Margin",
+            "Key Threshold":           "50% initial margin on equity purchases",
+            "Description":             "Regulates the extension of credit by brokers and dealers to customers for the purchase of securities. Sets the initial margin requirement at 50% of purchase price for equity securities.",
+        },
+        {
+            "Rule / Regulation":       "FINRA Rule 4210\nMargin Requirements",
+            "Governing Body":          "FINRA",
+            "CFR Citation":            "FINRA Rulebook § 4210",
+            "Federal Register Ref":    "81 FR 82254 (Nov. 22, 2016)\nSR-FINRA-2015-036",
+            "Dashboard Tab":           "Margin",
+            "Key Threshold":           "25% maintenance margin on long positions; 30% house requirement",
+            "Description":             "Establishes minimum maintenance margin requirements for customer accounts. Supplements Reg T by setting ongoing maintenance levels and concentration charge rules for large positions in a single security.",
+        },
+        {
+            "Rule / Regulation":       "FINRA Rule 4210(e)\nRepo / Reverse Repo Margin",
+            "Governing Body":          "FINRA",
+            "CFR Citation":            "FINRA Rulebook § 4210(e)",
+            "Federal Register Ref":    "81 FR 82254 (Nov. 22, 2016)\nSR-FINRA-2015-036",
+            "Dashboard Tab":           "Repo",
+            "Key Threshold":           "2% variation margin call trigger; daily mark-to-market",
+            "Description":             "Governs margin requirements for covered agency transactions (repos and reverse repos). Requires daily mark-to-market and margin calls when collateral deficiency exceeds 2% of the contract value.",
+        },
+        {
+            "Rule / Regulation":       "Regulation SHO\nShort Sale Regulation",
+            "Governing Body":          "SEC",
+            "CFR Citation":            "17 CFR §§ 242.200–242.204",
+            "Federal Register Ref":    "69 FR 48008 (Aug. 6, 2004)\nAmended 74 FR 2578 (Jan. 15, 2009)",
+            "Dashboard Tab":           "Reg SHO",
+            "Key Threshold":           "Locate required before short sale; close-out of fail-to-deliver within T+2",
+            "Description":             "Establishes rules governing short sales. Rule 203 requires a locate before executing a short sale. Rule 204 requires close-out of fail-to-deliver positions by the start of regular trading hours on T+2.",
+        },
+        {
+            "Rule / Regulation":       "Options Margin Rules\nOCC / FINRA Rule 4210(f)",
+            "Governing Body":          "OCC / FINRA / SEC",
+            "CFR Citation":            "17 CFR § 240.9b-1; FINRA § 4210(f)",
+            "Federal Register Ref":    "47 FR 12948 (Mar. 25, 1982)\nSR-FINRA-2022-020",
+            "Dashboard Tab":           "Options",
+            "Key Threshold":           "Margin based on underlying notional; 100-share multiplier per contract",
+            "Description":             "Governs margin requirements for listed options positions. Naked short calls and puts carry higher margin requirements. Writers of options must post margin equal to the option premium plus a percentage of the underlying security value.",
+        },
+        {
+            "Rule / Regulation":       "SEC Rule 17a-5\nFOCUS Report",
+            "Governing Body":          "SEC",
+            "CFR Citation":            "17 CFR § 240.17a-5",
+            "Federal Register Ref":    "38 FR 26644 (Sep. 25, 1973)\nAmended 86 FR 54500 (Oct. 1, 2021)",
+            "Dashboard Tab":           "FOCUS Report",
+            "Key Threshold":           "Monthly (Part II/IIA) or quarterly (Part II for smaller BDs) filing",
+            "Description":             "Requires broker-dealers to file the Financial and Operational Combined Uniform Single (FOCUS) Report with their designated examining authority. Part II captures net capital, reserve, and balance sheet data.",
+        },
+    ]
+
+    # ── Table ─────────────────────────────────────────────────────────────────
+    TH = (
+        "background:#080e1c;color:#2e4460;font-size:9.5px;font-weight:700;"
+        "letter-spacing:0.12em;text-transform:uppercase;padding:10px 14px;"
+        "border-bottom:1px solid #182035;white-space:nowrap;text-align:left"
+    )
+    TD_BASE = (
+        "padding:9px 14px;border-bottom:1px solid #0f1d32;"
+        "font-family:Inter,sans-serif;vertical-align:top;font-size:12px"
+    )
+    COLS = ["Rule / Regulation", "Governing Body", "CFR Citation",
+            "Federal Register Ref", "Dashboard Tab", "Key Threshold"]
+
+    headers_html = "".join(f'<th style="{TH}">{c}</th>' for c in COLS)
+
+    body_html = ""
+    for i, r in enumerate(REG_ROWS):
+        bg = "#0a1120" if i % 2 == 0 else "#070c18"
+        rule_cell = (
+            f'<td style="{TD_BASE};color:#deeeff;font-weight:600;white-space:nowrap">'
+            + r["Rule / Regulation"].replace("\n", "<br>") + "</td>"
+        )
+        body_cell = f'<td style="{TD_BASE};color:#7a9fc0">' + r["Governing Body"] + "</td>"
+        cfr_cell  = f'<td style="{TD_BASE};color:#c4d8ee;white-space:nowrap">' + r["CFR Citation"] + "</td>"
+        fr_cell   = (
+            f'<td style="{TD_BASE};color:#4a6585;white-space:nowrap;font-size:11px">'
+            + r["Federal Register Ref"].replace("\n", "<br>") + "</td>"
+        )
+        tab_cell  = (
+            f'<td style="{TD_BASE};color:#3b82f6;white-space:nowrap;font-size:11.5px">'
+            + r["Dashboard Tab"] + "</td>"
+        )
+        key_cell  = f'<td style="{TD_BASE};color:#c4d8ee">' + r["Key Threshold"] + "</td>"
+        body_html += (
+            f'<tr style="background:{bg}">'
+            + rule_cell + body_cell + cfr_cell + fr_cell + tab_cell + key_cell
+            + "</tr>"
+        )
+
+    st.markdown(
+        f'<div style="overflow-x:auto;border:1px solid #182035;border-radius:6px;margin-bottom:2rem">'
+        f'<table style="width:100%;border-collapse:collapse;font-family:Inter,sans-serif">'
+        f'<thead><tr>{headers_html}</tr></thead>'
+        f'<tbody>{body_html}</tbody>'
+        f'</table></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Detail cards ──────────────────────────────────────────────────────────
+    _section("Rule Summaries")
+    col_a, col_b = st.columns(2)
+    for idx, r in enumerate(REG_ROWS):
+        col = col_a if idx % 2 == 0 else col_b
+        with col:
+            st.markdown(
+                f'<div style="background:#0c1525;border:1px solid #182035;border-left:3px solid #3b82f6;'
+                f'border-radius:5px;padding:1rem 1.2rem;margin-bottom:1rem">'
+                f'<div style="color:#deeeff;font-size:13px;font-weight:600;margin-bottom:0.25rem">'
+                + r["Rule / Regulation"].replace("\n", " — ") +
+                f'</div>'
+                f'<div style="color:#4a6585;font-size:10px;letter-spacing:0.08em;'
+                f'text-transform:uppercase;margin-bottom:0.6rem">'
+                + r["Governing Body"] + "&nbsp;·&nbsp;" + r["CFR Citation"] +
+                f'</div>'
+                f'<div style="color:#7a9fc0;font-size:12px;line-height:1.5">'
+                + r["Description"] +
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
