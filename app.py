@@ -556,18 +556,25 @@ with t1:
               + f'<span style="font-size:9.5px;color:#4a6585;margin-left:0.4rem">{_worst.name}</span>',
               COLORS["green"] if _worst.shocked_is_compliant else COLORS["red"]), 8),
     ]
-    _dash_cols = st.columns(len(_dash_kpi_items))
-    for _dc, (_kpi_html, _tab_idx) in zip(_dash_cols, _dash_kpi_items):
-        _oc = f"window.parent.document.querySelectorAll('[data-baseweb=tab]')[{_tab_idx}].click()"
-        _dc.markdown(
-            f'<div onclick="{_oc}" style="cursor:pointer;transition:filter 0.15s" '
-            f'onmouseover="this.style.filter=\'brightness(1.2)\'" '
-            f'onmouseout="this.style.filter=\'brightness(1)\'" '
-            f'title="Click to view details">'
-            + _kpi_html +
-            '</div>',
-            unsafe_allow_html=True,
-        )
+    _kpi_font  = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+    _kpi_css   = ("* {margin:0;padding:0;box-sizing:border-box}"
+                  "html,body {background:#070c18;margin:0;padding:0}")
+    _kpi_cards = "".join(
+        f'<div style="flex:1;min-width:0;cursor:pointer;transition:filter 0.15s"'
+        f' onclick="window.parent.document.querySelectorAll(\'[data-baseweb=tab]\')[{_tab_idx}].click()"'
+        f' onmouseover="this.style.filter=\'brightness(1.25)\'"'
+        f' onmouseout="this.style.filter=\'brightness(1)\'"'
+        f' title="Click to view details">{_kpi_html}</div>'
+        for _kpi_html, _tab_idx in _dash_kpi_items
+    )
+    st.components.v1.html(
+        f'<html><head><link href="{_kpi_font}" rel="stylesheet">'
+        f'<style>{_kpi_css}</style></head><body>'
+        f'<div style="display:flex;gap:0.75rem;width:100%;padding-bottom:4px">{_kpi_cards}</div>'
+        f'</body></html>',
+        height=140,
+        scrolling=False,
+    )
 
     checks = [
         ("15c3-1  Net Capital",    nc_ok),
