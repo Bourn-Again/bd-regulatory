@@ -451,7 +451,7 @@ if st.session_state.sim_trades or st.session_state.sim_running:
         unsafe_allow_html=True,
     )
 
-t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
+t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
     "Dashboard",
     "Net Capital  /  15c3-1",
     "Reserve  /  15c3-3",
@@ -462,6 +462,7 @@ t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
     "FOCUS  Report",
     "Scenario  Tester",
     "Reg  Reference",
+    "Accounts",
 ])
 
 
@@ -2896,3 +2897,197 @@ with t10:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACCOUNTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+with t11:
+    _section("Client Accounts")
+
+    all_accts = sorted(
+        bor.get_customer_accounts() + bor.get_pab_accounts(),
+        key=lambda a: a.client_name or a.account_id,
+    )
+
+    sel_col, _ = st.columns([3, 5])
+    acct_labels = ["— All Accounts —"] + [
+        f"{a.client_name}  [{a.account_id}]" if a.client_name else a.account_id
+        for a in all_accts
+    ]
+    acct_map = {lbl: a for lbl, a in zip(acct_labels[1:], all_accts)}
+    sel = sel_col.selectbox("Account", acct_labels, label_visibility="collapsed")
+
+    st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+
+    _ACCT_TH = (
+        "background:#080e1c;color:#2e4460;font-size:9.5px;font-weight:700;"
+        "letter-spacing:0.12em;text-transform:uppercase;padding:10px 14px;"
+        "border-bottom:1px solid #182035;white-space:nowrap"
+    )
+
+    def _acct_td(val, align="left", color="#c4d8ee", bold=False):
+        fw = "font-weight:600;" if bold else ""
+        return (
+            f'<td style="padding:8px 14px;border-bottom:1px solid #0f1d32;'
+            f'font-family:Inter,sans-serif;font-size:12px;color:{color};'
+            f'text-align:{align};white-space:nowrap;{fw}">{val}</td>'
+        )
+
+    def _acct_money(v):
+        return f"${v:,.0f}" if v >= 0 else f"(${abs(v):,.0f})"
+
+    def _acct_table(headers_html, body_html):
+        st.markdown(
+            f'<div style="overflow-x:auto;border:1px solid #182035;border-radius:6px;margin-bottom:2rem">'
+            f'<table style="width:100%;border-collapse:collapse;font-family:Inter,sans-serif">'
+            f'<thead><tr>{headers_html}</tr></thead>'
+            f'<tbody>{body_html}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
+
+    if sel == "— All Accounts —":
+        # ── Summary table: one row per account ────────────────────────────────
+        _section("Account Summary")
+
+        col_defs = [
+            ("Client",         "left"),
+            ("Account ID",     "left"),
+            ("Type",           "left"),
+            ("Cash Balance",   "right"),
+            ("Long MV",        "right"),
+            ("Short MV",       "right"),
+            ("Margin Debit",   "right"),
+            ("Net Equity",     "right"),
+            ("# Positions",    "right"),
+        ]
+        headers_html = "".join(
+            f'<th style="{_ACCT_TH};text-align:{align}">{col}</th>'
+            for col, align in col_defs
+        )
+
+        pos_count = {}
+        for p in bor.positions:
+            pos_count[p.account_id] = pos_count.get(p.account_id, 0) + 1
+
+        body_html = ""
+        for i, a in enumerate(all_accts):
+            bg = "#0a1120" if i % 2 == 0 else "#070c18"
+            eq = a.equity
+            type_badge = (
+                f'<span style="background:#0f1d32;color:#7a9fc0;padding:1px 7px;'
+                f'border-radius:3px;font-size:10px;letter-spacing:0.06em">'
+                f'{a.account_type.value}</span>'
+            )
+            body_html += (
+                f'<tr style="background:{bg}">'
+                + _acct_td(a.client_name or "—", bold=True)
+                + _acct_td(a.account_id, color="#4a6585")
+                + _acct_td(type_badge)
+                + _acct_td(_acct_money(a.cash_balance), "right",
+                           COLORS["green"] if a.cash_balance >= 0 else COLORS["red"])
+                + _acct_td(f"${a.long_market_value:,.0f}", "right")
+                + _acct_td(f"${a.short_market_value:,.0f}", "right",
+                           COLORS["red"] if a.short_market_value > 0 else "#c4d8ee")
+                + _acct_td(f"${a.margin_debit:,.0f}", "right",
+                           COLORS["amber"] if a.margin_debit > 0 else "#c4d8ee")
+                + _acct_td(_acct_money(eq), "right",
+                           COLORS["green"] if eq >= 0 else COLORS["red"], bold=True)
+                + _acct_td(str(pos_count.get(a.account_id, 0)), "right", "#7a9fc0")
+                + "</tr>"
+            )
+        _acct_table(headers_html, body_html)
+
+    else:
+        acct = acct_map[sel]
+
+        # ── KPI cards ─────────────────────────────────────────────────────────
+        kpi_cols = st.columns(5)
+        kpi_data = [
+            ("Cash Balance",       acct.cash_balance,
+             COLORS["green"] if acct.cash_balance >= 0 else COLORS["red"],
+             "Credit" if acct.cash_balance >= 0 else "Debit balance"),
+            ("Long Market Value",  acct.long_market_value,  COLORS["blue"],  "Gross long exposure"),
+            ("Short Market Value", acct.short_market_value, COLORS["red"],   "Gross short exposure"),
+            ("Margin Debit",       acct.margin_debit,       COLORS["amber"], "Reg T financed"),
+            ("Net Equity",         acct.equity,
+             COLORS["green"] if acct.equity >= 0 else COLORS["red"],
+             "Long \u2212 Short \u2212 Debit"),
+        ]
+        for col, (label, val, accent, sub) in zip(kpi_cols, kpi_data):
+            sign = "" if val >= 0 else "-"
+            col.markdown(
+                _kpi(label, f'{sign}${abs(val):,.0f}', sub, accent),
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+        # ── Securities positions ───────────────────────────────────────────────
+        _section("Securities Positions")
+
+        acct_positions = sorted(
+            [p for p in bor.positions if p.account_id == acct.account_id],
+            key=lambda p: -p.market_value,
+        )
+
+        if not acct_positions:
+            st.markdown(
+                '<div style="text-align:center;color:#2e4460;padding:2rem 1rem;'
+                'border:1px dashed #182035;border-radius:5px;font-size:11px;'
+                'letter-spacing:0.08em;text-transform:uppercase">No positions in this account</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            pos_col_defs = [
+                ("Description",    "left"),
+                ("CUSIP",          "left"),
+                ("Security Type",  "left"),
+                ("Side",           "left"),
+                ("Quantity",       "right"),
+                ("Price",          "right"),
+                ("Market Value",   "right"),
+                ("Cost Basis",     "right"),
+                ("Unrealized P&L", "right"),
+            ]
+            headers_html = "".join(
+                f'<th style="{_ACCT_TH};text-align:{align}">{col}</th>'
+                for col, align in pos_col_defs
+            )
+            body_html = ""
+            for i, p in enumerate(acct_positions):
+                bg = "#0a1120" if i % 2 == 0 else "#070c18"
+                sec        = bor.securities.get(p.cusip)
+                desc       = (sec.description if sec else p.cusip)[:50]
+                sec_type   = sec.security_type.value.replace("_", " ").title() if sec else "—"
+                price      = sec.price if sec else 0.0
+                pnl        = (p.market_value - p.cost_basis if p.side.value == "LONG"
+                              else p.cost_basis - p.market_value)
+                pnl_color  = COLORS["green"] if pnl >= 0 else COLORS["red"]
+                side_color = COLORS["green"] if p.side.value == "LONG" else COLORS["red"]
+                side_badge = (
+                    f'<span style="color:{side_color};font-weight:700;'
+                    f'font-size:10px;letter-spacing:0.1em">{p.side.value}</span>'
+                )
+                type_badge = (
+                    f'<span style="background:#0f1d32;color:#7a9fc0;padding:1px 7px;'
+                    f'border-radius:3px;font-size:10px">{sec_type}</span>'
+                )
+                body_html += (
+                    f'<tr style="background:{bg}">'
+                    + _acct_td(desc, bold=True)
+                    + _acct_td(p.cusip, color="#4a6585")
+                    + _acct_td(type_badge)
+                    + _acct_td(side_badge)
+                    + _acct_td(f"{p.quantity:,.0f}", "right")
+                    + _acct_td(f"${price:,.4f}", "right", "#7a9fc0")
+                    + _acct_td(f"${p.market_value:,.0f}", "right")
+                    + _acct_td(f"${p.cost_basis:,.0f}", "right", "#4a6585")
+                    + _acct_td(
+                        f'{"+" if pnl >= 0 else ""}${pnl:,.0f}',
+                        "right", pnl_color, bold=True,
+                    )
+                    + "</tr>"
+                )
+            _acct_table(headers_html, body_html)
