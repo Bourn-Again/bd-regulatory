@@ -366,19 +366,71 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-col_title, col_regen = st.columns([8, 1])
+col_title, col_live_toggle, col_live_status, col_regen = st.columns([6, 1, 1, 1])
+with col_live_toggle:
+    _toggle = st.toggle("Live Mode", value=st.session_state.live_mode, key="_live_toggle")
+    if _toggle != st.session_state.live_mode:
+        st.session_state.live_mode = _toggle
+        st.rerun()
+with col_live_status:
+    if st.session_state.live_mode:
+        _n_live = len(st.session_state.live_trades)
+        st.markdown(
+            f'<div style="padding-top:0.45rem;font-size:9.5px;font-weight:700;'
+            f'letter-spacing:0.1em;color:#10b981">● LIVE&nbsp;&nbsp;'
+            f'<span style="color:#4a6585">{_n_live} trade{"s" if _n_live!=1 else ""}</span></div>',
+            unsafe_allow_html=True,
+        )
 with col_regen:
     if st.button("↺  Regenerate", use_container_width=True):
         st.cache_data.clear()
         generate_all()
+        st.session_state.live_trades    = []
+        st.session_state.metrics_history = []
         st.rerun()
+
+# ── Auto-refresh + simulated live trades ──────────────────────────────────────
+if st.session_state.live_mode:
+    from streamlit_autorefresh import st_autorefresh
+    _rc = st_autorefresh(interval=8_000, key="live_autorefresh")
+    if _rc != st.session_state._live_rc:
+        st.session_state._live_rc = _rc
+        # Simulate a small batch of incoming trades each tick
+        _eq_pool = [s for s in bor.securities.values()
+                    if s.security_type.value in ("EQUITY_LISTED", "ETF", "CORP_IG")]
+        _acct_ids = [a.account_id for a in bor.get_customer_accounts()]
+        if _eq_pool and _acct_ids:
+            import random as _rng
+            _batch = []
+            for _ in range(_rng.randint(2, 6)):
+                _s  = _rng.choice(_eq_pool)
+                _a  = _rng.choice(_acct_ids)
+                _dir = _rng.choice(["BUY", "SELL"])
+                _batch.append(ScenarioTrade(
+                    trade_id=new_trade_id(),
+                    account_id=_a,
+                    client_name=(bor.accounts[_a].client_name if _a in bor.accounts else _a),
+                    cusip=_s.cusip,
+                    description=f"[Live] {_s.description}",
+                    direction=_dir,
+                    quantity=float(_rng.randint(100, 50_000) // 100 * 100),
+                    price=_s.price * _rng.uniform(0.99, 1.01),
+                    security_type=_s.security_type.value,
+                    asset_class=_s.asset_class,
+                    is_margin=True,
+                ))
+            st.session_state.live_trades.extend(_batch)
 
 bor, nc, reserve, margin, focus, fails, clearing = run_all()
 
-# If simulation has accumulated trades, apply them so every tab reflects live state.
-# The cached baseline is untouched; we just shadow the top-level variables.
-if st.session_state.get("sim_trades"):
-    bor      = apply_scenario(bor, st.session_state.sim_trades)
+# Merge live feed trades + simulator trades and recompute if anything present.
+# The cached baseline is untouched; we shadow the top-level variables.
+_all_incoming = (
+    st.session_state.get("live_trades", []) +
+    st.session_state.get("sim_trades",  [])
+)
+if _all_incoming:
+    bor      = apply_scenario(bor, _all_incoming)
     nc       = NetCapitalCalculator(bor, config.CALCULATION_DATE).calculate()
     reserve  = CustomerReserveCalculator(bor, config.CALCULATION_DATE).calculate()
     margin   = MarginCalculator(bor, config.CALCULATION_DATE).calculate()
@@ -393,6 +445,24 @@ acct_name_map  = {a.account_id: (a.client_name or a.account_id) for a in bor.acc
 sec_desc_map   = {s.cusip: s.description for s in bor.securities.values()}
 cushion        = nc.cushion_pct * 100 if nc.cushion_pct != float("inf") else 0.0
 
+# ── Metrics history (within-session trending) ─────────────────────────────────
+from datetime import datetime as _dt
+_snap = {
+    "time":         _dt.now().strftime("%H:%M:%S"),
+    "net_capital":  nc.net_capital,
+    "required_nc":  nc.required_net_capital,
+    "excess_nc":    nc.excess_net_capital,
+    "cushion_pct":  cushion,
+    "reserve_req":  reserve.total_reserve_required,
+    "margin_calls": margin.total_margin_call_amount,
+    "n_calls":      margin.accounts_with_margin_calls,
+    "live_trades":  len(st.session_state.get("live_trades", [])),
+}
+_hist = st.session_state.get("metrics_history", [])
+if not _hist or _hist[-1]["net_capital"] != nc.net_capital or _hist[-1]["live_trades"] != _snap["live_trades"]:
+    _hist.append(_snap)
+    st.session_state.metrics_history = _hist[-500:]
+
 # ── Session state ─────────────────────────────────────────────────────────────
 if "scenario_trades" not in st.session_state:
     st.session_state.scenario_trades = []
@@ -403,9 +473,19 @@ if "sim_running" not in st.session_state:
 if "sim_trades" not in st.session_state:
     st.session_state.sim_trades = []
 if "sim_history" not in st.session_state:
-    st.session_state.sim_history = []   # list of metric snapshots per tick
+    st.session_state.sim_history = []
 if "sim_tick" not in st.session_state:
     st.session_state.sim_tick = 0
+if "live_trades" not in st.session_state:
+    st.session_state.live_trades = []
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "live_upload_key" not in st.session_state:
+    st.session_state.live_upload_key = 0
+if "metrics_history" not in st.session_state:
+    st.session_state.metrics_history = []
+if "_live_rc" not in st.session_state:
+    st.session_state._live_rc = 0
 
 # Prior-day baseline — computed once per session from seeded offsets of the cached baseline
 if "prior_day" not in st.session_state:
@@ -464,6 +544,70 @@ t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
     "Reg  Reference",
     "Accounts",
 ])
+
+
+# ── PDF report generator ──────────────────────────────────────────────────────
+def _build_pdf(nc, reserve, margin, clearing, fails, cushion) -> bytes:
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.set_margins(15, 15, 15)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 9, config.FIRM_NAME, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, f"Regulatory Compliance Report  —  Period: {config.REPORT_PERIOD}",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, f"As of {config.CALCULATION_DATE.strftime('%d %b %Y')}",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+    pdf.set_draw_color(40, 60, 96)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(4)
+
+    # Compliance status
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Compliance Status", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    for label, ok in [
+        ("Rule 15c3-1  Net Capital",   nc.is_compliant),
+        ("Rule 15c3-1  Early Warning", not nc.is_early_warning),
+        ("Rule 15c3-3  Reserve",       reserve.is_compliant),
+        ("Reg T / Margin",             margin.accounts_with_margin_calls == 0),
+        ("Regulation SHO  Fails",      fails.is_compliant),
+    ]:
+        pdf.set_text_color(16, 185, 129) if ok else pdf.set_text_color(239, 68, 68)
+        pdf.cell(0, 5, f"  {'PASS' if ok else 'FAIL'}  {label}",
+                 new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    # Key metrics
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Key Metrics", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    for label, value in [
+        ("Net Capital",                  f"${nc.net_capital/1e6:,.2f}M"),
+        ("Required Net Capital (2% ADI)", f"${nc.required_net_capital/1e6:,.2f}M"),
+        ("Excess / (Deficiency)",         f"${nc.excess_net_capital/1e6:,.2f}M"),
+        ("NC Cushion % of ADI",           f"{cushion:.1f}%"),
+        ("Aggregate Debit Items",         f"${nc.aggregate_debit_items/1e6:,.1f}M"),
+        ("Total Haircuts",                f"${nc.total_haircuts/1e6:,.2f}M"),
+        ("Customer Reserve Required",     f"${reserve.total_reserve_required/1e6:,.2f}M"),
+        ("Margin Calls — Count",          str(margin.accounts_with_margin_calls)),
+        ("Margin Calls — Amount",         f"${margin.total_margin_call_amount/1e6:,.2f}M"),
+        ("Clearing Org Margin",           f"${clearing.total_clearing_margin/1e6:,.2f}M"),
+    ]:
+        pdf.cell(110, 5, f"  {label}", border=0)
+        pdf.cell(0, 5, value, new_x="LMARGIN", new_y="NEXT")
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, f"Generated {_dt.now().strftime('%d %b %Y %H:%M:%S')}  —  For internal use only",
+             new_x="LMARGIN", new_y="NEXT")
+    return bytes(pdf.output())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -624,6 +768,224 @@ with t1:
             unsafe_allow_html=True,
         )
     st.markdown("<div style='height:0.2rem'></div>", unsafe_allow_html=True)
+
+    # ── Live Feed ─────────────────────────────────────────────────────────────
+    _section("Live Trade Feed")
+    _lf_col, _lf_info = st.columns([3, 5])
+
+    with _lf_col:
+        _live_file = st.file_uploader(
+            "Drop a trade CSV to update calculations instantly",
+            type=["csv"],
+            label_visibility="collapsed",
+            key=f"live_upload_{st.session_state.live_upload_key}",
+        )
+        if _live_file is not None:
+            try:
+                import pandas as _pd_lf
+                _df_lf = _pd_lf.read_csv(_live_file)
+                _df_lf.columns = [c.strip().lower() for c in _df_lf.columns]
+                _req = {"cusip", "direction", "quantity"}
+                if _req - set(_df_lf.columns):
+                    st.error(f"Missing columns: {', '.join(sorted(_req - set(_df_lf.columns)))}")
+                else:
+                    _default_acct = list(bor.accounts.keys())[0] if bor.accounts else ""
+                    _parsed_lf = []
+                    for _idx, _row in _df_lf.iterrows():
+                        try:
+                            _cu = str(_row["cusip"]).strip()
+                            _di = str(_row["direction"]).strip().upper()
+                            if _di not in ("BUY", "SELL"):
+                                continue
+                            _qt = float(_row["quantity"])
+                            _se = bor.securities.get(_cu)
+                            try:
+                                _pr = float(_row.get("price", ""))
+                            except (ValueError, TypeError):
+                                _pr = _se.price if _se else 0.0
+                            _ac = str(_row.get("account_id", "")).strip()
+                            _ac = _ac if _ac and _ac != "nan" else _default_acct
+                            _de = str(_row.get("description", "")).strip()
+                            _de = (_de if _de and _de != "nan"
+                                   else (_se.description if _se else _cu))
+                            _mg = str(_row.get("is_margin", "TRUE")).strip().upper() not in ("FALSE","0","NO")
+                            _parsed_lf.append(ScenarioTrade(
+                                trade_id=new_trade_id(),
+                                account_id=_ac,
+                                client_name=(bor.accounts[_ac].client_name if _ac in bor.accounts else _ac),
+                                cusip=_cu, description=_de, direction=_di,
+                                quantity=_qt, price=_pr,
+                                security_type=(_se.security_type.value if _se else "EQUITY_LISTED"),
+                                asset_class=(_se.asset_class if _se else "equity"),
+                                is_margin=_mg,
+                            ))
+                        except Exception:
+                            continue
+                    if _parsed_lf:
+                        st.session_state.live_trades.extend(_parsed_lf)
+                        st.session_state.live_upload_key += 1
+                        st.rerun()
+            except Exception as _e:
+                st.error(f"Could not parse file: {_e}")
+
+    with _lf_info:
+        _n_live = len(st.session_state.live_trades)
+        _live_mv = sum(t.market_value for t in st.session_state.live_trades)
+        _lf_c1, _lf_c2, _lf_c3 = st.columns(3)
+        _lf_c1.markdown(
+            _kpi("Live Trades Loaded", str(_n_live),
+                 "From file upload or simulation",
+                 COLORS["green"] if _n_live > 0 else COLORS["blue"]),
+            unsafe_allow_html=True,
+        )
+        _lf_c2.markdown(
+            _kpi("Live Trade MV", f"${_live_mv/1e6:,.1f}M",
+                 "Aggregate market value", COLORS["blue"]),
+            unsafe_allow_html=True,
+        )
+        _lf_mode_color = COLORS["green"] if st.session_state.live_mode else "#4a6585"
+        _lf_c3.markdown(
+            _kpi("Feed Mode",
+                 "AUTO-REFRESH" if st.session_state.live_mode else "MANUAL",
+                 "8s refresh when Live Mode on" if st.session_state.live_mode else "Toggle Live Mode in header",
+                 _lf_mode_color),
+            unsafe_allow_html=True,
+        )
+        if _n_live > 0:
+            if st.button("✕  Clear Live Trades", use_container_width=True):
+                st.session_state.live_trades = []
+                st.session_state.metrics_history = []
+                st.rerun()
+
+    # ── Metrics Trends ────────────────────────────────────────────────────────
+    _hist_data = st.session_state.get("metrics_history", [])
+    if len(_hist_data) >= 2:
+        _section("Metrics Trends")
+        import pandas as _pd_tr
+        _hdf = _pd_tr.DataFrame(_hist_data)
+
+        _tr1, _tr2 = st.columns(2)
+        with _tr1:
+            _fig_nc = go.Figure()
+            _fig_nc.add_trace(go.Scatter(
+                x=_hdf["time"], y=_hdf["net_capital"] / 1e6,
+                name="Net Capital", line=dict(color=COLORS["blue"], width=2), fill="tozeroy",
+                fillcolor="rgba(59,130,246,0.08)",
+            ))
+            _fig_nc.add_trace(go.Scatter(
+                x=_hdf["time"], y=_hdf["required_nc"] / 1e6,
+                name="Required NC", line=dict(color=COLORS["red"], width=1.5, dash="dash"),
+            ))
+            _fig_nc.update_layout(
+                title=dict(text="Net Capital vs Required ($M)", font=dict(size=11)),
+                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
+            )
+            _chart(_fig_nc, height=260)
+
+        with _tr2:
+            _fig_cs = go.Figure()
+            _fig_cs.add_trace(go.Scatter(
+                x=_hdf["time"], y=_hdf["cushion_pct"],
+                name="Cushion %", line=dict(color=COLORS["green"], width=2), fill="tozeroy",
+                fillcolor="rgba(16,185,129,0.08)",
+            ))
+            _fig_cs.add_hline(y=5, line_color=COLORS["amber"], line_dash="dash",
+                              annotation_text="Early Warning 5%", annotation_font_size=9)
+            _fig_cs.add_hline(y=2, line_color=COLORS["red"], line_dash="dash",
+                              annotation_text="Min 2%", annotation_font_size=9)
+            _fig_cs.update_layout(
+                title=dict(text="NC Cushion % of ADI", font=dict(size=11)),
+                yaxis_title="%", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
+            )
+            _chart(_fig_cs, height=260)
+
+        _tr3, _tr4 = st.columns(2)
+        with _tr3:
+            _fig_res = go.Figure(go.Scatter(
+                x=_hdf["time"], y=_hdf["reserve_req"] / 1e6,
+                name="Reserve Req", line=dict(color=COLORS["purple"], width=2), fill="tozeroy",
+                fillcolor="rgba(139,92,246,0.08)",
+            ))
+            _fig_res.update_layout(
+                title=dict(text="Customer Reserve Required ($M)", font=dict(size=11)),
+                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
+            )
+            _chart(_fig_res, height=260)
+
+        with _tr4:
+            _fig_mg = go.Figure()
+            _fig_mg.add_trace(go.Bar(
+                x=_hdf["time"], y=_hdf["margin_calls"] / 1e6,
+                name="Margin Calls $M", marker_color=COLORS["amber"],
+            ))
+            _fig_mg.update_layout(
+                title=dict(text="Margin Call Amount ($M)", font=dict(size=11)),
+                yaxis_title="$M", **{k: v for k, v in CHART_LAYOUT.items() if k != "title"},
+            )
+            _chart(_fig_mg, height=260)
+
+    # ── Exports ───────────────────────────────────────────────────────────────
+    _section("Export")
+    _ex1, _ex2, _ex3, _ex4 = st.columns(4)
+
+    with _ex1:
+        try:
+            _pdf_bytes = _build_pdf(nc, reserve, margin, clearing, fails, cushion)
+            st.download_button(
+                label="⬇  PDF Report",
+                data=_pdf_bytes,
+                file_name=f"regulatory_report_{config.CALCULATION_DATE}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as _pdf_err:
+            st.caption(f"PDF unavailable: {_pdf_err}")
+
+    with _ex2:
+        _pos_df = bor.positions_df()
+        st.download_button(
+            label="⬇  Positions CSV",
+            data=_pos_df.to_csv(index=False),
+            file_name=f"positions_{config.CALCULATION_DATE}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with _ex3:
+        _acct_rows = [
+            {
+                "account_id":        a.account_id,
+                "client_name":       a.client_name,
+                "account_type":      a.account_type.value,
+                "cash_balance":      a.cash_balance,
+                "long_market_value": a.long_market_value,
+                "short_market_value":a.short_market_value,
+                "margin_debit":      a.margin_debit,
+                "net_equity":        a.equity,
+            }
+            for a in bor.accounts.values()
+        ]
+        import pandas as _pd_ex
+        st.download_button(
+            label="⬇  Accounts CSV",
+            data=_pd_ex.DataFrame(_acct_rows).to_csv(index=False),
+            file_name=f"accounts_{config.CALCULATION_DATE}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with _ex4:
+        if _hist_data:
+            import pandas as _pd_h
+            st.download_button(
+                label="⬇  Metrics History CSV",
+                data=_pd_h.DataFrame(_hist_data).to_csv(index=False),
+                file_name=f"metrics_history_{config.CALCULATION_DATE}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No history yet — metrics are recorded as the dashboard refreshes.")
 
     # ── Gauge + Funding Requirements + Concentration ──────────────────────────
     g1, g2, g3, g4 = st.columns([2, 3, 2, 2])
