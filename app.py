@@ -1326,6 +1326,102 @@ with t2:
          f"{len(nc.haircut_details):,} positions", COLORS["amber"]),
     ])
 
+    # ── Headroom ──────────────────────────────────────────────────────────────
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    _section("Capital Headroom")
+    _hw1, _hw2, _hw3, _hw4 = st.columns(4)
+    _to_ew    = nc.net_capital - nc.early_warning_level
+    _to_min   = nc.excess_net_capital
+    _nc_ratio = (nc.net_capital / nc.required_net_capital
+                 if nc.required_net_capital else float("inf"))
+    _hc_drag  = (nc.total_haircuts / nc.tentative_net_capital * 100
+                 if nc.tentative_net_capital else 0.0)
+    _hw1.markdown(_kpi(
+        "To Early Warning",
+        f"${abs(_to_ew)/1e6:,.1f}M",
+        "Above 5% ADI threshold" if _to_ew >= 0 else "BREACH — Below early warning",
+        COLORS["green"] if _to_ew >= 0 else COLORS["red"],
+    ), unsafe_allow_html=True)
+    _hw2.markdown(_kpi(
+        "To Non-Compliant",
+        f"${abs(_to_min)/1e6:,.1f}M",
+        "Above 2% ADI threshold" if _to_min >= 0 else "BREACH — Non-compliant",
+        COLORS["green"] if _to_min >= 0 else COLORS["red"],
+    ), unsafe_allow_html=True)
+    _hw3.markdown(_kpi(
+        "NC / Minimum Ratio",
+        f"{_nc_ratio:.1f}×" if _nc_ratio != float("inf") else "∞",
+        "PAIB distributions suspended above 15×" if _nc_ratio > 15 else "Within distribution limit",
+        COLORS["amber"] if _nc_ratio > 15 else COLORS["green"],
+    ), unsafe_allow_html=True)
+    _hw4.markdown(_kpi(
+        "Haircut Drag",
+        f"{_hc_drag:.1f}%",
+        f"${nc.total_haircuts/1e6:,.1f}M consumed of ${nc.tentative_net_capital/1e6:,.1f}M tentative NC",
+        COLORS["amber"] if _hc_drag > 25 else COLORS["blue"],
+    ), unsafe_allow_html=True)
+
+    # ── Capital Waterfall ─────────────────────────────────────────────────────
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    _section("Net Capital Waterfall  —  Rule 15c3-1 Computation")
+    _na_total = sum(nc.non_allowable_assets.values())
+    fig_wf = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["absolute", "relative", "total", "relative", "total", "relative", "total"],
+        x=[
+            "Stockholders'<br>Equity",
+            "+ Sub Debt",
+            "= Total Capital",
+            "− Non-Allowable<br>Assets",
+            "= Tentative NC",
+            "− Haircuts",
+            "= Net Capital",
+        ],
+        y=[
+            nc.stockholders_equity  / 1e6,
+            nc.allowable_sub_debt   / 1e6,
+            nc.total_capital        / 1e6,
+            -_na_total              / 1e6,
+            nc.tentative_net_capital / 1e6,
+            -nc.total_haircuts      / 1e6,
+            nc.net_capital          / 1e6,
+        ],
+        text=[
+            f"${nc.stockholders_equity/1e6:,.1f}M",
+            f"+${nc.allowable_sub_debt/1e6:,.1f}M",
+            f"${nc.total_capital/1e6:,.1f}M",
+            f"−${_na_total/1e6:,.1f}M",
+            f"${nc.tentative_net_capital/1e6:,.1f}M",
+            f"−${nc.total_haircuts/1e6:,.1f}M",
+            f"${nc.net_capital/1e6:,.1f}M",
+        ],
+        textposition="outside",
+        textfont=dict(size=10, color="#c4d8ee"),
+        connector=dict(line=dict(color="#182035", width=1, dash="dot")),
+        increasing=dict(marker=dict(color=COLORS["green"], line=dict(width=0))),
+        decreasing=dict(marker=dict(color=COLORS["red"],   line=dict(width=0))),
+        totals=dict(   marker=dict(color=COLORS["blue"],   line=dict(width=0))),
+    ))
+    fig_wf.add_hline(
+        y=nc.early_warning_level / 1e6,
+        line_color=COLORS["amber"], line_dash="dash", line_width=1.5,
+        annotation_text=f"Early Warning  ${nc.early_warning_level/1e6:,.1f}M",
+        annotation_font_size=9, annotation_font_color=COLORS["amber"],
+        annotation_position="bottom right",
+    )
+    fig_wf.add_hline(
+        y=nc.required_net_capital / 1e6,
+        line_color=COLORS["red"], line_dash="dash", line_width=1.5,
+        annotation_text=f"Required NC  ${nc.required_net_capital/1e6:,.1f}M",
+        annotation_font_size=9, annotation_font_color=COLORS["red"],
+        annotation_position="top right",
+    )
+    fig_wf.update_layout(
+        yaxis=dict(tickprefix="$", ticksuffix="M", tickformat=",.0f"),
+        showlegend=False,
+    )
+    _chart(fig_wf, height=380)
+
     st.divider()
     c1, c2 = st.columns([1, 1])
 
@@ -1374,6 +1470,59 @@ with t2:
             unsafe_allow_html=True,
         )
 
+        # ── Within-tab NC Trend ────────────────────────────────────────────
+        _nc_hist = st.session_state.get("metrics_history", [])
+        st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+        _section("Net Capital  ·  Session Trend")
+        if len(_nc_hist) >= 2:
+            _df_trend = pd.DataFrame(_nc_hist)
+            fig_nc_trend = go.Figure()
+            fig_nc_trend.add_trace(go.Scatter(
+                x=_df_trend["time"], y=_df_trend["net_capital"],
+                mode="lines+markers", name="Net Capital",
+                line=dict(color=COLORS["blue"], width=2),
+                marker=dict(size=4),
+                hovertemplate="<b>%{x}</b><br>NC: %{y:$,.0f}<extra></extra>",
+            ))
+            fig_nc_trend.add_trace(go.Scatter(
+                x=_df_trend["time"], y=_df_trend["required_nc"],
+                mode="lines", name="Required NC",
+                line=dict(color=COLORS["red"], width=1.5, dash="dot"),
+                hovertemplate="<b>%{x}</b><br>Required: %{y:$,.0f}<extra></extra>",
+            ))
+            fig_nc_trend.update_layout(
+                yaxis=dict(tickprefix="$", tickformat=",.0f"),
+                legend=dict(orientation="h", y=1.1, font_size=10),
+                margin=dict(t=24, b=8),
+            )
+            _chart(fig_nc_trend, 200)
+
+            fig_cush_trend = go.Figure(go.Scatter(
+                x=_df_trend["time"], y=_df_trend["cushion_pct"],
+                mode="lines+markers",
+                line=dict(color=COLORS["green"], width=2),
+                marker=dict(size=4),
+                fill="tozeroy", fillcolor=COLORS["green"] + "22",
+                hovertemplate="<b>%{x}</b><br>Cushion: %{y:.1f}%<extra></extra>",
+            ))
+            fig_cush_trend.add_hline(
+                y=5, line_dash="dot", line_color=COLORS["amber"],
+                annotation_text="Early Warning (5%)", annotation_font_size=9,
+                annotation_position="bottom right",
+            )
+            fig_cush_trend.update_layout(
+                yaxis=dict(ticksuffix="%", title=dict(text="Cushion %", font_size=10)),
+                margin=dict(t=8, b=8),
+            )
+            _chart(fig_cush_trend, 160)
+        else:
+            st.markdown(
+                '<div style="padding:10px 14px;border:1px solid #182035;border-radius:5px;'
+                'color:#2e4460;font-size:11px;font-family:Inter,sans-serif;text-align:center">'
+                'Trend builds after 2+ snapshots — toggle Live Mode or regenerate to accumulate history.</div>',
+                unsafe_allow_html=True,
+            )
+
     with c2:
         _section("Haircut by Security Type")
         by_type = {}
@@ -1389,6 +1538,31 @@ with t2:
         _html_table(df_ht, {
             "Market Value": "${:,.0f}", "Haircut ($)": "${:,.0f}", "Eff. Rate %": "{:.2f}%",
         })
+
+        # ── Concentration Flag ─────────────────────────────────────────────
+        if not df_ht.empty:
+            _total_hc_c2 = df_ht["Haircut ($)"].sum()
+            _top_type = df_ht.iloc[0]
+            _top_share = _top_type["Haircut ($)"] / _total_hc_c2 * 100 if _total_hc_c2 else 0
+            if _top_share >= 60:
+                _flag_color, _flag_bg, _flag_label = COLORS["red"], "#1a0a0a", "HIGH CONCENTRATION"
+            elif _top_share >= 40:
+                _flag_color, _flag_bg, _flag_label = COLORS["amber"], "#1a1000", "ELEVATED CONCENTRATION"
+            else:
+                _flag_color, _flag_bg, _flag_label = COLORS["green"], "#091a0e", "DIVERSIFIED"
+            st.markdown(
+                f'<div style="margin-top:0.75rem;border:1px solid {_flag_color}55;border-radius:5px;'
+                f'background:{_flag_bg};padding:10px 14px;display:flex;align-items:center;gap:12px">'
+                f'<div style="width:8px;height:8px;border-radius:50%;background:{_flag_color};'
+                f'flex-shrink:0;box-shadow:0 0 6px {_flag_color}"></div>'
+                f'<div><span style="color:{_flag_color};font-size:9.5px;font-weight:700;'
+                f'letter-spacing:0.12em;font-family:Inter,sans-serif">{_flag_label}</span>'
+                f'<span style="color:#8ba3c0;font-size:11px;font-family:Inter,sans-serif"> — '
+                f'<b style="color:#deeeff">{_top_type["Security Type"]}</b> accounts for '
+                f'<b style="color:{_flag_color}">{_top_share:.1f}%</b> of total haircuts</span></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
         _section("MV vs Haircut by Type")
